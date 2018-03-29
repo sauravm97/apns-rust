@@ -10,9 +10,12 @@ documentation = "https://docs.rs/apns2"
 repository = "https://github.com/theduke/apns2-rust"
 
 [dependencies]
-uuid = { version = "0.6.0", features = ["serde", "v4"] }
-failure = "0.1.1"
+byteorder = "1"
 curl = "0.4.11"
+failure = "0.1.1"
+openssl = { version = "0.7.14", features = ["tlsv1_2", "npn", "alpn"] }
 serde = "1.0.34"
 serde_derive = "1.0.34"
 serde_json = "1.0.9"
+solicit = { git = "https://github.com/aagahi/solicit", features = ["tls"] }
+uuid = { version = "0.6.0", features = ["serde", "v4"] }

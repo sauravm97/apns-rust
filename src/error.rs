@@ -123,7 +123,7 @@ impl ::std::fmt::Display for ApiErrorReason {
 #[derive(Fail, Serialize, Deserialize, Clone, Debug)]
 #[fail(display = "{} (status: {}", reason, status)]
 pub struct ApiError {
-    pub status: u32,
+    pub status: u16,
     pub reason: ApiErrorReason,
 }
 
@@ -174,8 +174,8 @@ impl SendError {
     }
 }
 
-impl From<::curl::Error> for SendError {
-    fn from(e: ::curl::Error) -> Self {
+impl From<::solicit::http::HttpError> for SendError {
+    fn from(e: ::solicit::http::HttpError) -> Self {
         SendError::Other(e.into())
     }
 }

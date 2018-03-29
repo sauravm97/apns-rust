@@ -9,192 +9,130 @@ extern crate serde_derive;
 extern crate serde_json;
 extern crate uuid;
 
+extern crate byteorder;
+use byteorder::{BigEndian, WriteBytesExt};
+
+extern crate solicit;
+extern crate openssl;
+
+use std::net::TcpStream;
+
+
+use solicit::client::SimpleClient;
+use solicit::http::{HttpScheme, Header};
+use openssl::ssl::SslMethod::Tlsv1_2;
+use openssl::x509::X509;
+use openssl::ssl::SSL_OP_NO_COMPRESSION;
+use openssl::crypto::pkey::PKey;
+use openssl::ssl::{Ssl, SslStream, SslContext};
+
+use solicit::http::ALPN_PROTOCOLS;
+use std::str;
+use std::io::BufReader;
+use std::fs::File;
+
+
+
 mod types;
 pub use self::types::*;
 
 mod error;
 use self::error::*;
 
-use std::path::{Path, PathBuf};
-use std::cell::RefCell;
-
 use uuid::Uuid;
 use failure::Error;
-use curl::easy::{Easy2, Handler, HttpVersion, List, WriteError};
 
-/// Writer used by curl.
-struct Collector(Vec<u8>);
-
-impl Handler for Collector {
-    fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
-        self.0.extend_from_slice(data);
-        Ok(data.len())
-    }
+pub struct APNS {
+    gateway: String,
+    ssl_context: SslContext,
 }
 
-#[derive(Clone, Debug)]
-pub struct ProviderCertificate {
-    pub p12_path: PathBuf,
-    pub passphrase: Option<String>,
-}
+impl APNS {
+    pub fn new(cert_path: &str, key_path: &str, production: bool) -> Result<Self, Error> {
+        let mut ctx = SslContext::new(Tlsv1_2)?;
 
-#[derive(Clone, Debug)]
-pub enum Auth {
-    ProviderCertificate(ProviderCertificate),
-}
+        let cert_reader = &mut BufReader::new(File::open(cert_path)?);
+        let x509 = X509::from_pem(cert_reader)?;
+        let _ = ctx.set_certificate(&x509);
 
-impl Auth {
-    fn as_cert(&self) -> &ProviderCertificate {
-        match self {
-            &Auth::ProviderCertificate(ref c) => c,
-        }
-    }
-}
+        let pkey_reader = &mut BufReader::new(File::open(key_path)?);
+        let pkey = PKey::private_rsa_key_from_pem(pkey_reader)?;
+        let _ = ctx.set_private_key(&pkey);
 
-pub struct ApnsSync {
-    production: bool,
-    verbose: bool,
-    delivery_disabled: bool,
-    auth: Auth,
-    easy: RefCell<Easy2<Collector>>,
-}
+        ctx.set_options(SSL_OP_NO_COMPRESSION);
+        ctx.set_alpn_protocols(ALPN_PROTOCOLS);
+        ctx.set_npn_protocols(ALPN_PROTOCOLS);
 
-impl ApnsSync {
-    pub fn new(auth: Auth) -> Result<Self, Error> {
-        let mut easy = Easy2::new(Collector(Vec::new()));
-
-        easy.http_version(HttpVersion::V2)?;
-        // easy.connect_only(true)?;
-        // easy.url(APN_URL_PRODUCTION)?;
-
-        // Configure curl for client certificate.
-        {
-            let cert = auth.as_cert();
-
-            easy.ssl_cert(&cert.p12_path)?;
-            if let Some(ref pw) = cert.passphrase.as_ref() {
-                easy.key_password(&pw)?;
-            }
+        let gateway: String;
+        if production {
+            gateway = APN_URL_PRODUCTION.to_string();
+        } else {
+            gateway = APN_URL_DEV.to_string();
         }
 
-        let apns = ApnsSync {
-            production: true,
-            verbose: false,
-            delivery_disabled: false,
-            auth,
-            easy: RefCell::new(easy),
+        let apns = APNS {
+            gateway: gateway,
+            ssl_context: ctx,
         };
         Ok(apns)
     }
 
-    pub fn with_certificate<P: AsRef<Path>>(
-        path: P,
-        passphrase: Option<String>,
-    ) -> Result<ApnsSync, Error> {
-        Self::new(Auth::ProviderCertificate(ProviderCertificate {
-            p12_path: path.as_ref().to_path_buf(),
-            passphrase,
-        }))
-    }
+    pub fn new_client(&self) -> Result<SimpleClient<SslStream<TcpStream>>, Error> {
+        let ssl = Ssl::new(&self.ssl_context)?;
 
-    /// Enable/disable verbose debug logging to stderr.
-    pub fn set_verbose(&mut self, verbose: bool) {
-        self.verbose = verbose;
-    }
+        let raw_tcp = TcpStream::connect(self.gateway.as_str())?;
+        let mut ssl_stream = SslStream::connect(ssl, raw_tcp)?;
 
-    /// Set API endpoint to use (production or development sandbox).
-    pub fn set_production(&mut self, production: bool) {
-        self.production = production;
-    }
+        solicit::http::client::write_preface(&mut ssl_stream)?;
 
-    /// *ATTENTION*: This completely disables actual communication with the
-    /// APNS api.
-    ///
-    /// No connection will be established.
-    ///
-    /// Useful for integration tests in a larger application when nothing should
-    /// actually be sent.
-    pub fn disable_delivery_for_testing(&mut self) {
-        self.delivery_disabled = true;
-    }
-
-    /// Build the url for a device token.
-    fn build_url(&self, device_token: &str) -> String {
-        let root = if self.production {
-            APN_URL_PRODUCTION
-        } else {
-            APN_URL_DEV
-        };
-        format!("{}/3/device/{}", root, device_token)
+        Ok(SimpleClient::with_stream(ssl_stream, self.gateway.clone(), HttpScheme::Https)?)
     }
 
     /// Send a notification.
     /// Returns the UUID (either the configured one, or the one returned by the
     /// api).
-    pub fn send(&self, notification: Notification) -> Result<Uuid, SendError> {
+    pub fn send(&self, notification: Notification, client: &mut SimpleClient<SslStream<TcpStream>>) -> Result<Uuid, SendError> {
         let n = notification;
+        let path = format!("/3/device/{}", &n.device_token).into_bytes();
 
         // Just always generate a uuid client side for simplicity.
         let id = n.id.unwrap_or(Uuid::new_v4());
 
-        if self.delivery_disabled {
-            return Ok(id);
-        }
+        let u32bytes = |i| {
+            let mut wtr = vec![];
+            wtr.write_u32::<BigEndian>(i).unwrap();
+            wtr
+        };
+        let u64bytes = |i| {
+            let mut wtr = vec![];
+            wtr.write_u64::<BigEndian>(i).unwrap();
+            wtr
+        };
 
-        let url = self.build_url(&n.device_token);
-
-        // Add headers.
-
-        let mut headers = List::new();
-
-        // NOTE: if an option which requires a header is not set,
-        // the header is still added, but with an empty value,
-        // which instructs curl to drop the header.
-        // Otherwhise, headers from previous runs would stick around.
-
-        headers.append(&format!("apns-id:{}", id.to_string(),))?;
-        headers.append(&format!(
-            "apns-expiration:{}",
-            n.expiration
-                .map(|x| x.to_string())
-                .unwrap_or("".to_string())
-        ))?;
-        headers.append(&format!(
-            "apns-priority:{}",
-            n.priority
-                .map(|x| x.to_int().to_string())
-                .unwrap_or("".to_string())
-        ))?;
-        headers.append(&format!("apns-topic:{}", n.topic))?;
-        headers.append(&format!(
-            "apns-collapse-id:{}",
-            n.collapse_id
-                .map(|x| x.as_str().to_string())
-                .unwrap_or("".to_string())
-        ))?;
+        let mut headers = Vec::new();
+        headers.push(Header::new(b"apns-id".to_vec(), id.to_string().into_bytes()));
+        headers.push(Header::new(b"apns-topic".to_vec(), n.topic.as_bytes()));
+        n.expiration
+            .map(|x| headers.push(Header::new(b"apns-expiration".to_vec(),
+                                              u64bytes(x))));
+        n.priority
+            .map(|x| headers.push(Header::new(b"apns-priority".to_vec(),
+                                              u32bytes(x.to_int()))));
+        n.collapse_id
+            .map(|x| headers.push(Header::new(b"apns-collapse-id".to_vec(),
+                                              x.as_str().to_string().into_bytes())));
 
         let request = ApnsRequest { aps: n.payload, data: n.data };
         let raw_request = ::serde_json::to_vec(&request)?;
 
-        let mut easy = self.easy.borrow_mut();
+        let post = client.post(&path, &headers, raw_request)?;
+                //println!("{}", str::from_utf8(&response.body).unwrap());
 
-        match &self.auth {
-            _ => {}
-        }
-
-        easy.verbose(self.verbose)?;
-        easy.http_headers(headers)?;
-        easy.post(true)?;
-        easy.post_fields_copy(&raw_request)?;
-        easy.url(&url)?;
-        easy.perform()?;
-
-        let status = easy.response_code()?;
+        let status = post.status_code()?;
         if status != 200 {
             // Request failed.
             // Read json response with the error.
-            let response_data = easy.get_ref();
-            let reason = ErrorResponse::parse_payload(&response_data.0);
+            let reason = ErrorResponse::parse_payload(&post.body);
             Err(ApiError { status, reason }.into())
         } else {
             Ok(id)
