@@ -1,5 +1,5 @@
 [package]
-name = "apns2"
+name = "apns"
 description = "Apple Push Notification Service (apns) client library"
 version = "0.1.0"
 authors = ["Christoph Herzog <chris@theduke.at>"]
@@ -13,6 +13,6 @@ repository = "https://github.com/theduke/apns2-rust"
 uuid = { version = "0.6.0", features = ["serde", "v4"] }
 failure = "0.1.1"
 curl = "0.4.11"
-serde = "1.0.27"
-serde_derive = "1.0.27"
+serde = "1.0.34"
+serde_derive = "1.0.34"
 serde_json = "1.0.9"
