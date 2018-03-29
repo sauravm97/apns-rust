@@ -1,37 +1,30 @@
 #![deny(warnings)]
 
-extern crate curl;
-#[macro_use]
-extern crate failure;
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-extern crate uuid;
-
 extern crate byteorder;
 use byteorder::{BigEndian, WriteBytesExt};
-
-extern crate solicit;
+#[macro_use] extern crate failure;
+use failure::Error;
 extern crate openssl;
-
-use std::net::TcpStream;
-
+extern crate serde;
+#[macro_use] extern crate serde_derive;
+extern crate serde_json;
+extern crate solicit;
+extern crate uuid;
+use uuid::Uuid;
 
 use solicit::client::SimpleClient;
 use solicit::http::{HttpScheme, Header};
+use solicit::http::ALPN_PROTOCOLS;
 use openssl::ssl::SslMethod::Tlsv1_2;
 use openssl::x509::X509;
 use openssl::ssl::SSL_OP_NO_COMPRESSION;
 use openssl::crypto::pkey::PKey;
 use openssl::ssl::{Ssl, SslStream, SslContext};
 
-use solicit::http::ALPN_PROTOCOLS;
-use std::str;
-use std::io::BufReader;
+use std::net::TcpStream;
 use std::fs::File;
-
-
+use std::io::BufReader;
+use std::str;
 
 mod types;
 pub use self::types::*;
@@ -39,15 +32,14 @@ pub use self::types::*;
 mod error;
 use self::error::*;
 
-use uuid::Uuid;
-use failure::Error;
+pub type APNsClient = SimpleClient<SslStream<TcpStream>>;
 
-pub struct APNS {
+pub struct APNs {
     gateway: String,
     ssl_context: SslContext,
 }
 
-impl APNS {
+impl APNs {
     pub fn new(cert_path: &str, key_path: &str, production: bool) -> Result<Self, Error> {
         let mut ctx = SslContext::new(Tlsv1_2)?;
 
@@ -70,14 +62,14 @@ impl APNS {
             gateway = APN_URL_DEV.to_string();
         }
 
-        let apns = APNS {
+        let apns = APNs {
             gateway: gateway,
             ssl_context: ctx,
         };
         Ok(apns)
     }
 
-    pub fn new_client(&self) -> Result<SimpleClient<SslStream<TcpStream>>, Error> {
+    pub fn new_client(&self) -> Result<APNsClient, Error> {
         let ssl = Ssl::new(&self.ssl_context)?;
 
         let raw_tcp = TcpStream::connect(self.gateway.as_str())?;
@@ -91,7 +83,7 @@ impl APNS {
     /// Send a notification.
     /// Returns the UUID (either the configured one, or the one returned by the
     /// api).
-    pub fn send(&self, notification: Notification, client: &mut SimpleClient<SslStream<TcpStream>>) -> Result<Uuid, SendError> {
+    pub fn send(&self, notification: Notification, client: &mut APNsClient) -> Result<Uuid, SendError> {
         let n = notification;
         let path = format!("/3/device/{}", &n.device_token).into_bytes();
 
