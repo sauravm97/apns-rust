@@ -11,7 +11,6 @@ repository = "https://github.com/theduke/apns2-rust"
 
 [dependencies]
 byteorder = "1"
-curl = "0.4.11"
 failure = "0.1.1"
 openssl = { version = "0.7.14", features = ["tlsv1_2", "npn", "alpn"] }
 serde = "1.0.34"
