@@ -173,7 +173,7 @@ impl ApnsSync {
                 .unwrap_or("".to_string())
         ))?;
 
-        let request = ApnsRequest { aps: n.payload };
+        let request = ApnsRequest { aps: n.payload, data: n.data };
         let raw_request = ::serde_json::to_vec(&request)?;
 
         let mut easy = self.easy.borrow_mut();

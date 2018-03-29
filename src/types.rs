@@ -1,4 +1,5 @@
 use uuid::Uuid;
+use serde_json::{Map, Value};
 
 /// APNS production endpoint.
 pub static APN_URL_PRODUCTION: &'static str = "https://api.push.apple.com";
@@ -125,6 +126,8 @@ pub struct Payload {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct ApnsRequest {
     pub aps: Payload,
+    #[serde(flatten)]
+    pub data: Value,
 }
 
 /// A notification struct contains all relevant data for a notification request
@@ -137,6 +140,7 @@ pub struct Notification {
     pub topic: String,
     pub device_token: String,
     pub payload: Payload,
+    pub data: Value,
 
     /// Optional id identifying the message.
     pub id: Option<Uuid>,
@@ -154,6 +158,7 @@ impl Notification {
             topic,
             device_token,
             payload,
+            data: Value::Object(Map::new()),
             id: None,
             expiration: None,
             priority: None,
@@ -176,6 +181,13 @@ impl NotificationBuilder {
 
     pub fn payload(mut self, payload: Payload) -> Self {
         self.notification.payload = payload;
+        self
+    }
+
+    pub fn data(mut self, data: Value) -> Self {
+        if let Value::Object(_) = data {
+            self.notification.data = data;
+        }
         self
     }
 
