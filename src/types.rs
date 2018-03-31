@@ -165,6 +165,10 @@ impl Notification {
             collapse_id: None,
         }
     }
+
+    pub fn builder(topic: String, device_id: String) -> NotificationBuilder {
+        NotificationBuilder::new(topic, device_id)
+    }
 }
 
 /// A builder for convenient construction of notifications.
