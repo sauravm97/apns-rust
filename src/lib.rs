@@ -4,27 +4,25 @@ extern crate byteorder;
 use byteorder::{BigEndian, WriteBytesExt};
 #[macro_use] extern crate failure;
 use failure::Error;
+extern crate futures;
+use futures::Future;
+use futures::stream::Stream;
+extern crate http;
+use http::{Request, StatusCode};
+extern crate hyper;
+use hyper::Client;
+use hyper::client::HttpConnector;
+extern crate hyper_openssl;
+use hyper_openssl::HttpsConnector;
 extern crate openssl;
+use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslOptions};
 extern crate serde;
 #[macro_use] extern crate serde_derive;
 extern crate serde_json;
-extern crate solicit;
+extern crate tokio_core;
+use tokio_core::reactor::Core;
 extern crate uuid;
 use uuid::Uuid;
-
-use solicit::client::SimpleClient;
-use solicit::http::{HttpScheme, Header};
-use solicit::http::ALPN_PROTOCOLS;
-use openssl::ssl::SslMethod::Tlsv1_2;
-use openssl::x509::X509;
-use openssl::ssl::SSL_OP_NO_COMPRESSION;
-use openssl::crypto::pkey::PKey;
-use openssl::ssl::{Ssl, SslStream, SslContext};
-
-use std::net::TcpStream;
-use std::fs::File;
-use std::io::BufReader;
-use std::str;
 
 mod types;
 pub use self::types::*;
@@ -32,29 +30,19 @@ pub use self::types::*;
 mod error;
 use self::error::*;
 
-pub type APNsClient = SimpleClient<SslStream<TcpStream>>;
+pub struct APNsClient {
+    core: Core,
+    client: Client<HttpsConnector<HttpConnector>>,
+}
 
 pub struct APNs {
     gateway: String,
-    ssl_context: SslContext,
+    cert_path: String,
+    key_path: String,
 }
 
 impl APNs {
-    pub fn new(cert_path: &str, key_path: &str, production: bool) -> Result<Self, Error> {
-        let mut ctx = SslContext::new(Tlsv1_2)?;
-
-        let cert_reader = &mut BufReader::new(File::open(cert_path)?);
-        let x509 = X509::from_pem(cert_reader)?;
-        let _ = ctx.set_certificate(&x509);
-
-        let pkey_reader = &mut BufReader::new(File::open(key_path)?);
-        let pkey = PKey::private_rsa_key_from_pem(pkey_reader)?;
-        let _ = ctx.set_private_key(&pkey);
-
-        ctx.set_options(SSL_OP_NO_COMPRESSION);
-        ctx.set_alpn_protocols(ALPN_PROTOCOLS);
-        ctx.set_npn_protocols(ALPN_PROTOCOLS);
-
+    pub fn new(cert_path: String, key_path: String, production: bool) -> Result<Self, Error> {
         let gateway: String;
         if production {
             gateway = APN_URL_PRODUCTION.to_string();
@@ -64,28 +52,42 @@ impl APNs {
 
         let apns = APNs {
             gateway: gateway,
-            ssl_context: ctx,
+            cert_path: cert_path,
+            key_path: key_path,
         };
         Ok(apns)
     }
 
     pub fn new_client(&self) -> Result<APNsClient, Error> {
-        let ssl = Ssl::new(&self.ssl_context)?;
+        let mut ssl = SslConnector::builder(SslMethod::tls())?;
 
-        let raw_tcp = TcpStream::connect(self.gateway.as_str())?;
-        let mut ssl_stream = SslStream::connect(ssl, raw_tcp)?;
+        ssl.set_certificate_file(self.cert_path.as_str(), SslFiletype::PEM)?;
+        ssl.set_private_key_file(self.key_path.as_str(), SslFiletype::PEM)?;
 
-        solicit::http::client::write_preface(&mut ssl_stream)?;
+        ssl.set_options(SslOptions::NO_COMPRESSION);
+        //ssl.set_alpn_protos(ALPN_PROTOCOLS);
 
-        Ok(SimpleClient::with_stream(ssl_stream, self.gateway.clone(), HttpScheme::Https)?)
+        let core = Core::new()?;
+        let mut http_connector = HttpConnector::new(1, &core.handle());
+        http_connector.set_keepalive(None);
+        let client = Client::configure()
+            .connector(HttpsConnector::with_connector(http_connector,
+                                                      ssl)?)
+            .keep_alive(true)
+            .keep_alive_timeout(None)
+            .build(&core.handle());
+        let apns_client = APNsClient {
+            core: core,
+            client: client,
+        };
+        Ok(apns_client)
     }
 
     /// Send a notification.
     /// Returns the UUID (either the configured one, or the one returned by the
     /// api).
-    pub fn send(&self, notification: Notification, client: &mut APNsClient) -> Result<Uuid, SendError> {
+    pub fn send(&self, notification: Notification, apns_client: &mut APNsClient) -> Result<Uuid, SendError> {
         let n = notification;
-        let path = format!("/3/device/{}", &n.device_token).into_bytes();
 
         // Just always generate a uuid client side for simplicity.
         let id = n.id.unwrap_or(Uuid::new_v4());
@@ -102,29 +104,40 @@ impl APNs {
         };
 
         let mut headers = Vec::new();
-        headers.push(Header::new(b"apns-id".to_vec(), id.to_string().into_bytes()));
-        headers.push(Header::new(b"apns-topic".to_vec(), n.topic.as_bytes()));
+        headers.push(("apns-id", id.to_string().into_bytes()));
+        headers.push(("apns-topic", n.topic.into_bytes()));
         n.expiration
-            .map(|x| headers.push(Header::new(b"apns-expiration".to_vec(),
-                                              u64bytes(x))));
+            .map(|x| headers.push(("apns-expiration", u64bytes(x))));
         n.priority
-            .map(|x| headers.push(Header::new(b"apns-priority".to_vec(),
-                                              u32bytes(x.to_int()))));
+            .map(|x| headers.push(("apns-priority", u32bytes(x.to_int()))));
         n.collapse_id
-            .map(|x| headers.push(Header::new(b"apns-collapse-id".to_vec(),
-                                              x.as_str().to_string().into_bytes())));
+            .map(|x| headers.push(("apns-collapse-id", x.as_str().to_string().into_bytes())));
 
-        let request = ApnsRequest { aps: n.payload, data: n.data };
-        let raw_request = ::serde_json::to_vec(&request)?;
+        let uri = format!("{}/3/device/{}", &self.gateway, &n.device_token);
+        let mut request = Request::post(uri);
+        let _ = headers
+            .into_iter()
+            .fold(&mut request, |r, (k, v)| {
+                let bs: &[u8] = &v;
+                r.header(k, bs)
+            });
 
-        let post = client.post(&path, &headers, raw_request)?;
-                //println!("{}", str::from_utf8(&response.body).unwrap());
+        let body = ApnsRequest { aps: n.payload, data: n.data };
+        let raw_body = ::serde_json::to_vec(&body)?;
 
-        let status = post.status_code()?;
-        if status != 200 {
+        let request = request.body(raw_body.into())?;
+
+        let response = apns_client.core.run(apns_client.client
+                                             .request_compat(request))?;
+
+        let status = response.status();
+        if status != StatusCode::OK {
             // Request failed.
             // Read json response with the error.
-            let reason = ErrorResponse::parse_payload(&post.body);
+            let body = response.into_body().concat2().wait()?;
+
+            let reason = ErrorResponse::parse_payload(&body);
+            let status = status.into();
             Err(ApiError { status, reason }.into())
         } else {
             Ok(id)

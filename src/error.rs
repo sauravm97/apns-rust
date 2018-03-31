@@ -174,8 +174,14 @@ impl SendError {
     }
 }
 
-impl From<::solicit::http::HttpError> for SendError {
-    fn from(e: ::solicit::http::HttpError) -> Self {
+impl From<::http::Error> for SendError {
+    fn from(e: ::http::Error) -> Self {
+        SendError::Other(e.into())
+    }
+}
+
+impl From<::hyper::Error> for SendError {
+    fn from(e: ::hyper::Error) -> Self {
         SendError::Other(e.into())
     }
 }

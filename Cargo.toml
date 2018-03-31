@@ -12,9 +12,13 @@ repository = "https://github.com/theduke/apns2-rust"
 [dependencies]
 byteorder = "1"
 failure = "0.1.1"
-openssl = { version = "0.7.14", features = ["tlsv1_2", "npn", "alpn"] }
+futures = "0.1.20"
+http = "0.1.5"
+hyper = { version = "0.11.24", features = ["compat"]}
+hyper-openssl = "0.5.0"
+openssl = { version = "0.10.4", features = ["v102"] }
 serde = "1.0.34"
 serde_derive = "1.0.34"
 serde_json = "1.0.9"
-solicit = { git = "https://github.com/aagahi/solicit", features = ["tls"] }
+tokio-core = "0.1.16"
 uuid = { version = "0.6.0", features = ["serde", "v4"] }
