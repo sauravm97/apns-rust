@@ -79,7 +79,7 @@ impl APNs {
     /// Send a notification.
     /// Returns the UUID (either the configured one, or the one returned by the
     /// api).
-    pub fn send(&self, notification: Notification, apns_client: APNsClient) -> Result<Uuid, SendError> {
+    pub fn send(&self, notification: Notification, apns_client: &APNsClient) -> Result<Uuid, SendError> {
         let n = notification;
 
         // Just always generate a uuid client side for simplicity.
