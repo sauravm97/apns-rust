@@ -30,10 +30,7 @@ pub use self::types::*;
 mod error;
 use self::error::*;
 
-pub struct APNsClient {
-    core: Core,
-    client: Client<HttpsConnector<HttpConnector>>,
-}
+pub type APNsClient = Client<HttpsConnector<HttpConnector>>;
 
 pub struct APNs {
     gateway: String,
@@ -76,17 +73,13 @@ impl APNs {
             .keep_alive(true)
             .keep_alive_timeout(None)
             .build(&core.handle());
-        let apns_client = APNsClient {
-            core: core,
-            client: client,
-        };
-        Ok(apns_client)
+        Ok(client)
     }
 
     /// Send a notification.
     /// Returns the UUID (either the configured one, or the one returned by the
     /// api).
-    pub fn send(&self, notification: Notification, apns_client: &mut APNsClient) -> Result<Uuid, SendError> {
+    pub fn send(&self, notification: Notification, apns_client: APNsClient) -> Result<Uuid, SendError> {
         let n = notification;
 
         // Just always generate a uuid client side for simplicity.
@@ -126,16 +119,11 @@ impl APNs {
         let raw_body = ::serde_json::to_vec(&body)?;
 
         let request = request.body(raw_body.into())?;
-
-        let response = apns_client.core.run(apns_client.client
-                                             .request_compat(request))?;
+        let response = apns_client.request_compat(request).wait()?;
 
         let status = response.status();
         if status != StatusCode::OK {
-            // Request failed.
-            // Read json response with the error.
             let body = response.into_body().concat2().wait()?;
-
             let reason = ErrorResponse::parse_payload(&body);
             let status = status.into();
             Err(ApiError { status, reason }.into())
@@ -153,15 +141,15 @@ mod test {
     #[test]
     fn test_cert() {
         let cert_path = var("APNS_CERT_PATH").unwrap();
-        let cert_pw = Some(var("APNS_CERT_PW").unwrap());
+        let cert_pw = var("APNS_CERT_PW").unwrap();
         let topic = var("APNS_TOPIC").unwrap();
         let token = var("APNS_DEVICE_TOKEN").unwrap();
 
-        let mut apns = ApnsSync::with_certificate(cert_path, cert_pw).unwrap();
-        apns.set_verbose(true);
+        let apns = APNs::new(cert_path, cert_pw, false).unwrap();
+        let client = apns.new_client().unwrap();
         let n = NotificationBuilder::new(topic, token)
             .title("title")
             .build();
-        apns.send(n).unwrap();
+        apns.send(n, client).unwrap();
     }
 }
