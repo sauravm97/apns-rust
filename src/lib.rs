@@ -32,8 +32,6 @@ pub use self::types::*;
 mod error;
 use self::error::*;
 
-pub type APNsClient = SimpleClient<SslStream<TcpStream>>;
-
 pub struct APNs {
     gateway: String,
     ssl_context: SslContext,
@@ -77,13 +75,19 @@ impl APNs {
 
         solicit::http::client::write_preface(&mut ssl_stream)?;
 
-        Ok(SimpleClient::with_stream(ssl_stream, self.gateway.clone(), HttpScheme::Https)?)
+        Ok(APNsClient(SimpleClient::with_stream(ssl_stream,
+                                                self.gateway.clone(),
+                                                HttpScheme::Https)?))
     }
+}
 
+pub struct APNsClient(SimpleClient<SslStream<TcpStream>>);
+
+impl APNsClient {
     /// Send a notification.
     /// Returns the UUID (either the configured one, or the one returned by the
     /// api).
-    pub fn send(&self, notification: Notification, client: &mut APNsClient) -> Result<Uuid, SendError> {
+    pub fn send(&mut self, notification: Notification) -> Result<Uuid, SendError> {
         let n = notification;
         let path = format!("/3/device/{}", &n.device_token).into_bytes();
 
@@ -117,7 +121,7 @@ impl APNs {
         let request = ApnsRequest { aps: n.payload, data: n.data };
         let raw_request = ::serde_json::to_vec(&request)?;
 
-        let post = client.post(&path, &headers, raw_request)?;
+        let post = self.0.post(&path, &headers, raw_request)?;
                 //println!("{}", str::from_utf8(&response.body).unwrap());
 
         let status = post.status_code()?;
