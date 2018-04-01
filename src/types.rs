@@ -2,10 +2,10 @@ use uuid::Uuid;
 use serde_json::{Map, Value};
 
 /// APNS production endpoint.
-pub static APN_URL_PRODUCTION: &'static str = "https://api.push.apple.com";
+pub static APN_URL_PRODUCTION: &'static str = "api.push.apple.com:443";
 
 /// APNS development endpoint.
-pub static APN_URL_DEV: &'static str = "https://api.development.push.apple.com";
+pub static APN_URL_DEV: &'static str = "api.development.push.apple.com:443";
 
 /// Notification priority.
 /// See APNS documentation for the effects.

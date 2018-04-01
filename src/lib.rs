@@ -140,15 +140,16 @@ mod test {
     #[test]
     fn test_cert() {
         let cert_path = var("APNS_CERT_PATH").unwrap();
-        let cert_pw = Some(var("APNS_CERT_PW").unwrap());
+        let key_path = var("APNS_KEY_PATH").unwrap();
         let topic = var("APNS_TOPIC").unwrap();
         let token = var("APNS_DEVICE_TOKEN").unwrap();
 
-        let mut apns = ApnsSync::with_certificate(cert_path, cert_pw).unwrap();
-        apns.set_verbose(true);
+        let apns = APNs::new(&cert_path, &key_path, false).unwrap();
+        let mut apns_client = apns.new_client().unwrap();
         let n = NotificationBuilder::new(topic, token)
             .title("title")
+            .body("body")
             .build();
-        apns.send(n).unwrap();
+        apns.send(n, &mut apns_client).unwrap();
     }
 }
