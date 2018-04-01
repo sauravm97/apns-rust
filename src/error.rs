@@ -174,6 +174,12 @@ impl SendError {
     }
 }
 
+impl From<::hyper::error::UriError> for SendError {
+    fn from(e: ::hyper::error::UriError) -> Self {
+        SendError::Other(e.into())
+    }
+}
+
 impl From<::http::Error> for SendError {
     fn from(e: ::http::Error) -> Self {
         SendError::Other(e.into())
