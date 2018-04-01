@@ -21,10 +21,11 @@ use openssl::ssl::SSL_OP_NO_COMPRESSION;
 use openssl::crypto::pkey::PKey;
 use openssl::ssl::{Ssl, SslStream, SslContext};
 
-use std::net::TcpStream;
 use std::fs::File;
 use std::io::BufReader;
+use std::net::TcpStream;
 use std::str;
+use std::sync::Mutex;
 
 mod types;
 pub use self::types::*;
@@ -75,19 +76,21 @@ impl APNs {
 
         solicit::http::client::write_preface(&mut ssl_stream)?;
 
-        Ok(APNsClient(SimpleClient::with_stream(ssl_stream,
-                                                self.gateway.clone(),
-                                                HttpScheme::Https)?))
+        Ok(APNsClient(
+                Mutex::new(
+                    SimpleClient::with_stream(ssl_stream,
+                                              self.gateway.clone(),
+                                              HttpScheme::Https)?)))
     }
 }
 
-pub struct APNsClient(SimpleClient<SslStream<TcpStream>>);
+pub struct APNsClient(Mutex<SimpleClient<SslStream<TcpStream>>>);
 
 impl APNsClient {
     /// Send a notification.
     /// Returns the UUID (either the configured one, or the one returned by the
     /// api).
-    pub fn send(&mut self, notification: Notification) -> Result<Uuid, SendError> {
+    pub fn send(&self, notification: Notification) -> Result<Uuid, SendError> {
         let n = notification;
         let path = format!("/3/device/{}", &n.device_token).into_bytes();
 
@@ -121,8 +124,7 @@ impl APNsClient {
         let request = ApnsRequest { aps: n.payload, data: n.data };
         let raw_request = ::serde_json::to_vec(&request)?;
 
-        let post = self.0.post(&path, &headers, raw_request)?;
-                //println!("{}", str::from_utf8(&response.body).unwrap());
+        let post = self.0.lock().unwrap().post(&path, &headers, raw_request)?;
 
         let status = post.status_code()?;
         if status != 200 {
