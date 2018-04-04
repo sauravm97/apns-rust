@@ -1,5 +1,5 @@
-use uuid::Uuid;
 use serde_json::{Map, Value};
+use uuid::Uuid;
 
 /// APNS production endpoint.
 pub static APN_URL_PRODUCTION: &'static str = "api.push.apple.com:443";

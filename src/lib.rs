@@ -2,24 +2,26 @@
 
 extern crate byteorder;
 use byteorder::{BigEndian, WriteBytesExt};
-#[macro_use] extern crate failure;
+#[macro_use]
+extern crate failure;
 use failure::Error;
 extern crate openssl;
 extern crate serde;
-#[macro_use] extern crate serde_derive;
+#[macro_use]
+extern crate serde_derive;
 extern crate serde_json;
 extern crate solicit;
 extern crate uuid;
 use uuid::Uuid;
 
-use solicit::client::SimpleClient;
-use solicit::http::{HttpScheme, Header};
-use solicit::http::ALPN_PROTOCOLS;
-use openssl::ssl::SslMethod::Tlsv1_2;
-use openssl::x509::X509;
-use openssl::ssl::SSL_OP_NO_COMPRESSION;
 use openssl::crypto::pkey::PKey;
-use openssl::ssl::{Ssl, SslStream, SslContext};
+use openssl::ssl::SSL_OP_NO_COMPRESSION;
+use openssl::ssl::SslMethod::Tlsv1_2;
+use openssl::ssl::{Ssl, SslContext, SslStream};
+use openssl::x509::X509;
+use solicit::client::SimpleClient;
+use solicit::http::ALPN_PROTOCOLS;
+use solicit::http::{Header, HttpScheme};
 
 use std::fs::File;
 use std::io::BufReader;
@@ -28,10 +30,11 @@ use std::str;
 use std::sync::Mutex;
 
 mod types;
-pub use self::types::*;
+pub use types::*;
 
 mod error;
-use self::error::*;
+pub use error::SendError;
+use error::*;
 
 pub struct APNs {
     gateway: String,
@@ -76,11 +79,11 @@ impl APNs {
 
         solicit::http::client::write_preface(&mut ssl_stream)?;
 
-        Ok(APNsClient(
-                Mutex::new(
-                    SimpleClient::with_stream(ssl_stream,
-                                              self.gateway.clone(),
-                                              HttpScheme::Https)?)))
+        Ok(APNsClient(Mutex::new(SimpleClient::with_stream(
+            ssl_stream,
+            self.gateway.clone(),
+            HttpScheme::Https,
+        )?)))
     }
 }
 
@@ -109,19 +112,26 @@ impl APNsClient {
         };
 
         let mut headers = Vec::new();
-        headers.push(Header::new(b"apns-id".to_vec(), id.to_string().into_bytes()));
+        headers.push(Header::new(
+            b"apns-id".to_vec(),
+            id.to_string().into_bytes(),
+        ));
         headers.push(Header::new(b"apns-topic".to_vec(), n.topic.as_bytes()));
         n.expiration
-            .map(|x| headers.push(Header::new(b"apns-expiration".to_vec(),
-                                              u64bytes(x))));
+            .map(|x| headers.push(Header::new(b"apns-expiration".to_vec(), u64bytes(x))));
         n.priority
-            .map(|x| headers.push(Header::new(b"apns-priority".to_vec(),
-                                              u32bytes(x.to_int()))));
-        n.collapse_id
-            .map(|x| headers.push(Header::new(b"apns-collapse-id".to_vec(),
-                                              x.as_str().to_string().into_bytes())));
+            .map(|x| headers.push(Header::new(b"apns-priority".to_vec(), u32bytes(x.to_int()))));
+        n.collapse_id.map(|x| {
+            headers.push(Header::new(
+                b"apns-collapse-id".to_vec(),
+                x.as_str().to_string().into_bytes(),
+            ))
+        });
 
-        let request = ApnsRequest { aps: n.payload, data: n.data };
+        let request = ApnsRequest {
+            aps: n.payload,
+            data: n.data,
+        };
         let raw_request = ::serde_json::to_vec(&request)?;
 
         let post = self.0.lock().unwrap().post(&path, &headers, raw_request)?;
@@ -140,8 +150,8 @@ impl APNsClient {
 
 #[cfg(test)]
 mod test {
-    use std::env::var;
     use super::*;
+    use std::env::var;
 
     #[test]
     fn test_cert() {
